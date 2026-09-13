@@ -1,0 +1,276 @@
+# ============================================================
+# Shadows of the Fallen - Root .gitignore
+# Blender + Unity + Project Files
+# ============================================================
+
+
+# ============================================================
+# OS / Editor
+# ============================================================
+
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+*.bak
+*.orig
+
+
+# ============================================================
+# General temporary / generated files
+# ============================================================
+
+*.log
+*.cache
+*.temp
+*.pid
+*.lock
+
+__pycache__/
+*.py[cod]
+
+.pytest_cache/
+.mypy_cache/
+
+
+# ============================================================
+# Blender
+# ============================================================
+
+# Blender autosaves / recovery
+*.blend1
+*.blend2
+*.blend3
+*.blend4
+*.blend5
+*.blend6
+*.blend7
+*.blend8
+*.blend9
+
+# Blender backup / temp
+*.blend~
+*.blend.tmp
+
+# Blender simulation/cache output
+*.bphys
+*.vdb
+*.abc
+
+# Blender generated render/cache directories
+.blendcache/
+cache/
+caches/
+
+# Keep intentional project caches out of Git
+**/.cache/
+
+# Blender Python bytecode
+**/__pycache__/
+
+
+# ============================================================
+# Shadows of the Fallen - Generated World Data
+# ============================================================
+
+# Ignore generated terrain / procedural output if these folders
+# are regenerated from WORLD_MASTER.
+**/generated/
+**/generated_assets/
+**/procedural_output/
+**/terrain_cache/
+**/world_cache/
+
+# Large exports / baked data
+**/bakes/
+**/baked/
+**/simulation_cache/
+
+
+# ============================================================
+# Unity
+# ============================================================
+
+# Unity generated folders
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+
+# Unity Asset Store tools
+Assets/AssetStoreTools*
+
+# Unity generated Visual Studio / Rider files
+.vs/
+.idea/
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+
+# Unity package manager generated files
+Packages/packages-lock.json
+
+# Unity Burst generated files
+[Bb]urstDebugInformation_DoNotShip/
+
+# Unity profiling/debugging
+MemoryCaptures/
+
+# Addressables generated data
+ServerData/
+
+# Auto-generated StreamingAssets
+# Uncomment ONLY if your StreamingAssets are entirely generated.
+# Assets/StreamingAssets/
+
+
+# ============================================================
+# Unity Builds
+# ============================================================
+
+*.apk
+*.aab
+*.app
+*.exe
+*.exe.meta
+*.dll
+*.pdb
+*.unitypackage
+
+# WebGL
+**/Build/
+**/Builds/
+
+# Android
+*.keystore
+*.aab
+
+# iOS
+*.ipa
+*.xcodeproj/
+*.xcworkspace/
+*.xcuserstate/
+
+
+# ============================================================
+# Unity Crash Reports
+# ============================================================
+
+sysinfo.txt
+*.dmp
+crashlytics-build.properties
+
+
+# ============================================================
+# IDE / Language generated files
+# ============================================================
+
+*.pidb.meta
+*.pdb.meta
+*.mdb
+*.opendb
+*.VC.db
+
+# Rider
+.idea/
+
+# VS Code
+.vscode/
+
+
+# ============================================================
+# Secrets / Local Environment
+# ============================================================
+
+.env
+.env.*
+!.env.example
+
+*.pem
+*.key
+*.p12
+*.keystore
+
+# Local machine configuration
+local/
+.local/
+
+
+# ============================================================
+# Credentials / Cloud configuration
+# ============================================================
+
+# Firebase / Google credentials
+google-services.json
+GoogleService-Info.plist
+
+# Uncomment if these are NEVER meant to be committed:
+# **/secrets/
+# **/*credentials*
+# **/*credentials*.json
+
+
+# ============================================================
+# Large archives
+# ============================================================
+
+*.zip
+*.7z
+*.rar
+*.tar
+*.gz
+
+
+# ============================================================
+# Optional: Generated exports
+# ============================================================
+
+# Uncomment if these are generated rather than source-controlled:
+# exports/
+# export/
+# builds/
+# release/
+
+
+# ============================================================
+# IMPORTANT PROJECT SOURCE EXCEPTIONS
+# ============================================================
+
+# Keep WORLD_MASTER source geography tracked.
+!WORLD_MASTER/
+!WORLD_MASTER/**
+
+# Keep Blender project files tracked.
+!*.blend
+
+# Keep Unity Assets and project configuration tracked.
+!Assets/
+!Assets/**
+
+!Packages/
+!Packages/**
+
+!ProjectSettings/
+!ProjectSettings/**
+
+!UserSettings/
+!UserSettings/**
