@@ -8,6 +8,46 @@
 # OS / Editor
 # ============================================================
 
+
+# Blender
+*.blend1
+*.blend2
+*.blend3
+__pycache__/
+
+# Blender generated/cache
+.blender/
+
+# Unity
+Library/
+Temp/
+Obj/
+Logs/
+UserSettings/
+Build/
+Builds/
+MemoryCaptures/
+Recordings/
+
+# Generated world cells
+00_WORLD_MASTER/cells/*/generated/
+
+# Generated exports
+09_EXPORT/
+
+# AI generated temporary assets
+08_REFERENCE/higgsfield/generated/
+07_ASSETS/generated/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+*.key
+*.pem
+
 .DS_Store
 .DS_Store?
 ._*
@@ -274,3 +314,4 @@ GoogleService-Info.plist
 
 !UserSettings/
 !UserSettings/**
+

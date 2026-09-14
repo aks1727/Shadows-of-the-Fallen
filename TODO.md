@@ -1,0 +1,20 @@
+CURRENT
+01_REGION_BOUNDS
+        │
+        ▼
+02_COORDINATE_GRID
+        │
+        ▼
+03_HYDROLOGY_SPLINES
+        │
+        ▼
+04_TRANSPORT_SPLINES
+        │
+        ▼
+05_SHORELINE
+        │
+        ▼
+06_ELEVATION
+        │
+        ▼
+07_TERRAIN_GREYBOX
