@@ -1,0 +1,313 @@
+{
+  "project": "Shadows of the Fallen",
+  "version": "1.1.0",
+  "purpose": "Maps story locations and gameplay landmarks onto authoritative World Master physical regions without changing the coordinate system.",
+
+  "source_of_truth": {
+    "physical_regions": "00_WORLD_MASTER/coordinates/world_master.json",
+    "cell_grid": "00_WORLD_MASTER/coordinates/cell_grid.json"
+  },
+
+  "rules": [
+    "world_master.json is authoritative for physical region coordinates.",
+    "The 1 km cell grid is authoritative for world spatial partitioning.",
+    "Story locations do not create new top-level geographic regions unless explicitly approved.",
+    "Landmarks and facilities are contained within physical regions or geographic sub-regions.",
+    "Geographic sub-regions may exist inside World Master regions without becoming new World Master regions.",
+    "Geographic sub-regions do not change the global coordinate system.",
+    "Elevation must remain continuous across physical region and cell boundaries.",
+    "Exact story coordinates remain undefined until deliberately assigned.",
+    "Hidden story regions may be intentionally undisclosed to the player until discovered through gameplay."
+  ],
+
+  "regions": {
+
+    "karthen_mountains": {
+      "world_master_region": "karthen_mountains",
+      "story_identity": "Karthen Mountains",
+      "status": "confirmed",
+      "terrain_role": "major_mountain_system",
+
+      "elevation_role": {
+        "character": "high_mountain",
+        "priority": "highest_land_elevation"
+      },
+
+      "story_locations": [
+        {
+          "id": "raven_creek",
+          "name": "Raven Creek",
+          "type": "settlement",
+          "status": "conceptual",
+          "exact_coordinates": null
+        },
+        {
+          "id": "blackfrost_facility",
+          "name": "Blackfrost Facility",
+          "type": "facility",
+          "status": "conceptual",
+          "exact_coordinates": null
+        }
+      ],
+
+      "landmarks": [
+        "snow-covered forests",
+        "frozen lakes",
+        "mountain villages",
+        "abandoned military bases",
+        "frozen caves",
+        "ice cliffs",
+        "deep valleys",
+        "avalanche zones"
+      ]
+    },
+
+    "western_timber": {
+      "world_master_region": "western_timber",
+      "story_identity": "Western Timber",
+      "status": "confirmed",
+      "terrain_role": "forested_hilly_region",
+
+      "geographic_sub_regions": {
+        "kaldar_jungle": {
+          "id": "kaldar_jungle",
+          "name": "Kaldar Jungle",
+          "type": "hidden_geographic_sub_region",
+          "status": "confirmed",
+          "parent_world_master_region": "western_timber",
+
+          "visibility": {
+            "world_map": "hidden",
+            "player_discovery": "required",
+            "discovery_style": "organic_exploration"
+          },
+
+          "terrain_role": "dense_tropical_jungle",
+
+          "design_rules": [
+            "Kaldar Jungle exists geographically inside western_timber.",
+            "Kaldar Jungle is not a new World Master region.",
+            "Kaldar Jungle does not receive its own top-level coordinate bounds.",
+            "Its final boundary should follow terrain and ecological characteristics rather than an arbitrary rectangle.",
+            "It may span portions of multiple 1 km cells.",
+            "Its terrain must remain continuous with surrounding western_timber terrain.",
+            "Its exact geographic footprint will be defined later."
+          ],
+
+          "environment": [
+            "dense tropical vegetation",
+            "steep jungle hills",
+            "rivers",
+            "waterfalls",
+            "caves",
+            "cliffs",
+            "ancient bridges",
+            "hidden paths",
+            "heavy rainfall",
+            "fog"
+          ],
+
+          "story_locations": [
+            {
+              "id": "lost_city_of_kaldar",
+              "name": "Lost City of Kaldar",
+              "type": "ancient_city",
+              "status": "conceptual",
+              "exact_coordinates": null
+            },
+            {
+              "id": "kaldar_eclipse_facility",
+              "name": "Kaldar Eclipse Facility",
+              "type": "underground_facility",
+              "status": "conceptual",
+              "exact_coordinates": null
+            }
+          ]
+        }
+      },
+
+      "story_locations": [],
+
+      "landmarks": [
+        "forested hills",
+        "valleys",
+        "natural wilderness",
+        "remote trails"
+      ]
+    },
+
+    "nova_city": {
+      "world_master_region": "nova_city",
+      "story_identity": "Vesper City",
+      "status": "confirmed",
+      "terrain_role": "major_urban_lowland",
+
+      "elevation_role": {
+        "character": "gentle_lowland_with_rolling_terrain",
+        "priority": "highly_buildable"
+      },
+
+      "districts": [
+        "Downtown",
+        "Old Quarter",
+        "Harbor District",
+        "Industrial Zone",
+        "Rich District",
+        "Slums"
+      ],
+
+      "story_locations": [
+        {
+          "id": "vesper_tower",
+          "name": "Vesper Tower",
+          "type": "landmark",
+          "status": "conceptual",
+          "exact_coordinates": null
+        }
+      ]
+    },
+
+    "mainland_badlands": {
+      "world_master_region": "mainland_badlands",
+      "story_identity": "Redhaven Desert",
+      "status": "confirmed",
+      "terrain_role": "high_desert_badlands",
+
+      "elevation_role": {
+        "character": "plateaus_basins_canyons",
+        "priority": "strong_relief"
+      },
+
+      "story_locations": [
+        {
+          "id": "dustfall",
+          "name": "Dustfall",
+          "type": "settlement",
+          "status": "conceptual",
+          "exact_coordinates": null
+        },
+        {
+          "id": "mirage_casino",
+          "name": "The Mirage Casino",
+          "type": "major_facility",
+          "status": "conceptual",
+          "exact_coordinates": null
+        }
+      ],
+
+      "landmarks": [
+        "abandoned mines",
+        "military checkpoints",
+        "oil facilities",
+        "radio towers",
+        "desert highways",
+        "small settlements"
+      ]
+    },
+
+    "gang_city": {
+      "world_master_region": "gang_city",
+      "story_identity": "Gang City",
+      "status": "confirmed_world_master_only",
+      "terrain_role": "urban_lowland_or_rolling_terrain",
+      "story_locations": []
+    },
+
+    "central_wilderness": {
+      "world_master_region": "central_wilderness",
+      "story_identity": "Central Wilderness",
+      "status": "confirmed",
+      "terrain_role": "rolling_natural_wilderness",
+      "story_locations": []
+    },
+
+    "southern_coastline": {
+      "world_master_region": "southern_coastline",
+      "story_identity": "Southern Coast",
+      "status": "confirmed",
+      "terrain_role": "coastal_transition",
+
+      "elevation_role": {
+        "character": "lowlands_to_coastal_shelf",
+        "priority": "major_coastal_system"
+      },
+
+      "story_locations": [
+        {
+          "id": "port_azure",
+          "name": "Port Azure",
+          "type": "settlement",
+          "status": "conceptual",
+          "exact_coordinates": null
+        }
+      ]
+    },
+
+    "khara_archipelago": {
+      "world_master_region": "khara_archipelago",
+      "story_identity": "Khara Archipelago",
+      "status": "confirmed",
+      "terrain_role": "island_group",
+
+      "story_locations": [
+        {
+          "id": "azure_island",
+          "name": "Azure Island",
+          "type": "major_island",
+          "status": "conceptual",
+          "exact_coordinates": null
+        }
+      ],
+
+      "relationship": "Azure Island is treated as a major island within the Khara Archipelago unless later changed."
+    },
+
+    "abyss_atoll": {
+      "world_master_region": "abyss_atoll",
+      "story_identity": "The Abyss",
+      "status": "confirmed",
+      "terrain_role": "deep_ocean_and_atoll_system",
+
+      "elevation_role": {
+        "character": "deep_bathymetry",
+        "priority": "deepest_ocean_terrain"
+      },
+
+      "story_locations": [
+        {
+          "id": "aircraft_wreck",
+          "name": "Aircraft Wreck",
+          "type": "underwater_landmark",
+          "status": "conceptual",
+          "exact_coordinates": null
+        },
+        {
+          "id": "underwater_ruins",
+          "name": "Ancient Underwater Ruins",
+          "type": "underwater_landmark",
+          "status": "conceptual",
+          "exact_coordinates": null
+        },
+        {
+          "id": "eclipse_underwater_facility",
+          "name": "Eclipse Underwater Facility",
+          "type": "major_facility",
+          "status": "conceptual",
+          "exact_coordinates": null
+        }
+      ]
+    }
+  },
+
+  "hidden_geographic_regions": [
+    {
+      "id": "kaldar_jungle",
+      "parent_world_master_region": "western_timber",
+      "type": "geographic_sub_region",
+      "status": "confirmed",
+      "player_visibility": "hidden_until_discovered",
+      "exact_bounds": null,
+      "notes": "Kaldar Jungle is a hidden geographic area within western_timber. It will be defined by terrain/ecology later and may cross multiple 1 km cells."
+    }
+  ]
+}
