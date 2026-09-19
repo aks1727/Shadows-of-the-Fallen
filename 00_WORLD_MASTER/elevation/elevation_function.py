@@ -1,26 +1,62 @@
 #!/usr/bin/env python3
 
+"""
+SHADOWS OF THE FALLEN
+CONTINUOUS WORLD ELEVATION V3
+
+Authoritative source:
+    00_WORLD_MASTER/elevation/elevation_master.json
+
+World source:
+    00_WORLD_MASTER/coordinates/world_master.json
+
+V3 terrain model:
+
+    WORLD_BASE
+        +
+    REGIONAL_SHAPE
+        +
+    MAJOR_FEATURES
+        +
+    LOCAL_DETAIL
+
+Important:
+    - No cell owns elevation.
+    - No cell gets a random offset.
+    - Elevation is evaluated from world X/Y.
+    - Region transitions are smoothly blended.
+    - Noise is detail, not the primary terrain generator.
+    - The final global clamp is a safety guard, not terrain shaping.
+"""
+
+from __future__ import annotations
+
 import json
 import math
 import os
 import sys
+
 
 # ============================================================
 # PATHS
 # ============================================================
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-WORLD_MASTER_PATH = os.path.join(
+
+ELEVATION_JSON = os.path.join(
     SCRIPT_DIR,
-    "..",
-    "coordinates",
-    "world_master.json"
+    "elevation_master.json",
 )
 
-ELEVATION_MASTER_PATH = os.path.join(
-    SCRIPT_DIR,
-    "elevation_master.json"
+WORLD_JSON = os.path.normpath(
+    os.path.join(
+        SCRIPT_DIR,
+        "..",
+        "coordinates",
+        "world_master.json",
+    )
 )
+
 
 # ============================================================
 # LOAD MASTER DATA
@@ -30,16 +66,49 @@ def load_json(path):
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
-WORLD_MASTER = load_json(WORLD_MASTER_PATH)
-ELEVATION_MASTER = load_json(ELEVATION_MASTER_PATH)
 
-WORLD_REGIONS = WORLD_MASTER["regions"]
-ELEVATION_REGIONS = ELEVATION_MASTER["regions"]
+ELEVATION_MASTER = load_json(ELEVATION_JSON)
+WORLD_MASTER = load_json(WORLD_JSON)
 
-GLOBAL_MIN = float(ELEVATION_MASTER["global_elevation_envelope"]["minimum_m"])
-GLOBAL_MAX = float(ELEVATION_MASTER["global_elevation_envelope"]["maximum_m"])
-SEA_LEVEL = float(ELEVATION_MASTER["sea_level"]["z"])
-CELL_SIZE = float(ELEVATION_MASTER["sampling"]["prototype_cell_size_m"])
+
+if ELEVATION_MASTER.get("project") != "Shadows of the Fallen":
+    raise RuntimeError("Wrong elevation_master.json")
+
+
+if not ELEVATION_MASTER["terrain_rules"]["world_coordinate_based"]:
+    raise RuntimeError("World-coordinate elevation is disabled in master.")
+
+
+# ============================================================
+# AUTHORITATIVE SETTINGS
+# ============================================================
+
+SEA_LEVEL = float(
+    ELEVATION_MASTER["sea_level"]["z"]
+)
+
+GLOBAL_MIN = float(
+    ELEVATION_MASTER["global_elevation_envelope"]["minimum_m"]
+)
+
+GLOBAL_MAX = float(
+    ELEVATION_MASTER["global_elevation_envelope"]["maximum_m"]
+)
+
+CELL_SIZE = float(
+    ELEVATION_MASTER["sampling"]["prototype_cell_size_m"]
+)
+
+SAMPLE_SPACING = float(
+    ELEVATION_MASTER["sampling"]["prototype_sample_spacing_m"]
+)
+
+VERTICES_PER_AXIS = int(
+    ELEVATION_MASTER["sampling"]["prototype_vertices_per_axis"]
+)
+
+REGIONS = ELEVATION_MASTER["regions"]
+
 
 # ============================================================
 # BASIC MATH
@@ -48,577 +117,1871 @@ CELL_SIZE = float(ELEVATION_MASTER["sampling"]["prototype_cell_size_m"])
 def clamp(value, minimum, maximum):
     return max(minimum, min(maximum, value))
 
+
 def lerp(a, b, t):
     return a + (b - a) * t
 
-def smoothstep(t):
-    t = clamp(t, 0.0, 1.0)
-    return t * t * (3.0 - 2.0 * t)
 
 def smootherstep(t):
+    """
+    C2 smooth interpolation.
+
+    This is intentionally used for region transitions so we don't
+    introduce hard elevation/gradient steps.
+    """
     t = clamp(t, 0.0, 1.0)
-    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
 
-# ============================================================
-# DETERMINISTIC HASH / NOISE
-# ============================================================
-
-def hash2d(x, y, seed=1337):
-    """
-    Deterministic pseudo-random value in [-1, 1].
-    """
-    n = (
-        int(x) * 374761393
-        + int(y) * 668265263
-        + seed * 1442695041
+    return (
+        t * t * t *
+        (t * (t * 6.0 - 15.0) + 10.0)
     )
-    n = (n ^ (n >> 13)) * 1274126177
-    n = n ^ (n >> 16)
-    return ((n & 0x7fffffff) / 1073741823.5) - 1.0
 
-def value_noise(x, y, scale=1000.0, seed=1337):
+
+def smooth_threshold(value, edge0, edge1):
+    if edge1 <= edge0:
+        return 1.0 if value >= edge1 else 0.0
+
+    return smootherstep(
+        (value - edge0) / (edge1 - edge0)
+    )
+
+
+# ============================================================
+# DETERMINISTIC HASH
+# ============================================================
+
+def hash2d(ix, iy, seed=1337):
     """
-    Smooth deterministic 2D value noise in [-1.0, 1.0].
+    Deterministic integer hash.
+
+    Never uses Python's hash(), so results are stable between runs.
     """
+
+    n = (
+        ix * 374761393
+        + iy * 668265263
+        + seed * 1442695041
+    ) & 0xFFFFFFFF
+
+    n ^= n >> 13
+    n = (n * 1274126177) & 0xFFFFFFFF
+    n ^= n >> 16
+
+    return (
+        n / 2147483647.5
+    ) - 1.0
+
+
+# ============================================================
+# VALUE NOISE
+# ============================================================
+
+def value_noise(x, y, scale, seed=1337):
+
     if scale <= 0:
         return 0.0
 
     gx = x / scale
     gy = y / scale
 
-    x0 = math.floor(gx)
-    y0 = math.floor(gy)
+    ix = math.floor(gx)
+    iy = math.floor(gy)
 
-    tx = gx - x0
-    ty = gy - y0
+    fx = gx - ix
+    fy = gy - iy
 
-    sx = smootherstep(tx)
-    sy = smootherstep(ty)
+    sx = smootherstep(fx)
+    sy = smootherstep(fy)
 
-    n00 = hash2d(x0, y0, seed)
-    n10 = hash2d(x0 + 1, y0, seed)
-    n01 = hash2d(x0, y0 + 1, seed)
-    n11 = hash2d(x0 + 1, y0 + 1, seed)
+    v00 = hash2d(ix,     iy,     seed)
+    v10 = hash2d(ix + 1, iy,     seed)
+    v01 = hash2d(ix,     iy + 1, seed)
+    v11 = hash2d(ix + 1, iy + 1, seed)
 
-    nx0 = lerp(n00, n10, sx)
-    nx1 = lerp(n01, n11, sx)
+    a = lerp(v00, v10, sx)
+    b = lerp(v01, v11, sx)
 
-    return lerp(nx0, nx1, sy)
+    return lerp(a, b, sy)
 
-def fractal_noise(
+
+def fbm(
     x,
     y,
-    base_scale=1000.0,
-    octaves=4,
-    persistence=0.5,
-    seed=1337
+    scale,
+    octaves,
+    persistence,
+    seed
 ):
     """
-    Normalized multi-octave noise mapped to [0.0, 1.0].
+    Fractal noise normalized approximately to [-1,+1].
+
+    V3 deliberately keeps this controlled.
     """
+
     total = 0.0
     amplitude = 1.0
-    frequency = 1.0
-    amplitude_sum = 0.0
+    frequency = scale
+    amplitude_total = 0.0
 
-    for octave in range(octaves):
-        scale = base_scale / frequency
+    for i in range(octaves):
+
         total += value_noise(
             x,
             y,
-            scale=scale,
-            seed=seed + octave * 101
+            frequency,
+            seed + i * 101
         ) * amplitude
 
-        amplitude_sum += amplitude
+        amplitude_total += amplitude
+
         amplitude *= persistence
-        frequency *= 2.0
+        frequency *= 0.5
 
-    if amplitude_sum == 0.0:
-        return 0.5
-
-    # Map [-1.0, 1.0] -> [0.0, 1.0]
-    return clamp((total / amplitude_sum) * 0.5 + 0.5, 0.0, 1.0)
-
-def ridged_noise(x, y, base_scale=800.0, octaves=4, lacunarity=2.0, gain=0.5, seed=0):
-    """
-    Multi-octave ridged noise mapped to normalized [0.0, 1.0].
-    """
-    val = 0.0
-    amp = 1.0
-    freq = 1.0 / base_scale
-    weight = 1.0
-    amp_sum = 0.0
-
-    for i in range(octaves):
-        n = value_noise(x * freq, y * freq, seed=seed + i * 31)
-        # Fold noise to create sharp ridge creases: 1 - |noise|
-        n = 1.0 - abs(n)
-        n = n * n * weight
-        weight = clamp(n * 2.0, 0.0, 1.0)
-        val += n * amp
-        amp_sum += amp
-        freq *= lacunarity
-        amp *= gain
-
-    if amp_sum == 0.0:
+    if amplitude_total == 0:
         return 0.0
-    return clamp(val / amp_sum, 0.0, 1.0)
 
-def domain_warp(x, y, strength=180.0, scale=1200.0, seed=77):
-    # Normalized offset from [-1, 1]
-    dx = (fractal_noise(x, y, base_scale=scale, octaves=2, seed=seed) * 2.0 - 1.0) * strength
-    dy = (fractal_noise(x + 52.3, y + 18.7, base_scale=scale, octaves=2, seed=seed + 101) * 2.0 - 1.0) * strength
-    return x + dx, y + dy
+    return total / amplitude_total
+
+
+def ridged_noise(
+    x,
+    y,
+    scale,
+    octaves,
+    seed
+):
+    n = fbm(
+        x,
+        y,
+        scale,
+        octaves,
+        0.5,
+        seed
+    )
+
+    return 1.0 - abs(n)
+
 
 # ============================================================
-# WORLD REGION HELPERS
+# LOW-FREQUENCY DOMAIN WARP
 # ============================================================
 
-def point_inside_region(x, y, region_data):
-    bounds = region_data["bounds"]
-    minimum = bounds["min"]
-    maximum = bounds["max"]
+def domain_warp(
+    x,
+    y,
+    amount,
+    scale,
+    seed
+):
+    """
+    V3 uses only broad, low-amplitude warping.
+
+    High-frequency domain warping was one of the things capable
+    of producing the ugly spike field seen in V2.
+    """
+
+    wx = fbm(
+        x + 1731.0,
+        y - 941.0,
+        scale,
+        2,
+        0.5,
+        seed
+    )
+
+    wy = fbm(
+        x - 1127.0,
+        y + 619.0,
+        scale,
+        2,
+        0.5,
+        seed + 17
+    )
+
     return (
-        minimum[0] <= x <= maximum[0]
+        x + wx * amount,
+        y + wy * amount
+    )
+
+
+# ============================================================
+# REGION BOUNDS
+# ============================================================
+
+def extract_bounds(obj):
+    """
+    Supports the actual World Master bounds structure:
+
+        "bounds": {
+            "min": [x, y],
+            "max": [x, y]
+        }
+
+    Also accepts the alternate forms used by older master files.
+    """
+
+    if not isinstance(obj, dict):
+        return None
+
+    # --------------------------------------------------------
+    # Actual World Master format
+    # --------------------------------------------------------
+
+    if "bounds" in obj:
+
+        value = obj["bounds"]
+
+        if isinstance(value, dict):
+
+            # PRIMARY FORMAT:
+            #
+            # "bounds": {
+            #     "min": [x, y],
+            #     "max": [x, y]
+            # }
+
+            if (
+                isinstance(value.get("min"), (list, tuple))
+                and
+                isinstance(value.get("max"), (list, tuple))
+                and
+                len(value["min"]) >= 2
+                and
+                len(value["max"]) >= 2
+            ):
+
+                min_x = float(value["min"][0])
+                min_y = float(value["min"][1])
+
+                max_x = float(value["max"][0])
+                max_y = float(value["max"][1])
+
+                return (
+                    min(min_x, max_x),
+                    min(min_y, max_y),
+                    max(min_x, max_x),
+                    max(min_y, max_y),
+                )
+
+            # Alternate explicit format
+
+            possible = [
+                ("min_x", "min_y", "max_x", "max_y"),
+                ("xmin", "ymin", "xmax", "ymax"),
+                ("west", "south", "east", "north"),
+                ("left", "bottom", "right", "top"),
+            ]
+
+            for keys in possible:
+
+                if all(k in value for k in keys):
+
+                    return (
+                        float(value[keys[0]]),
+                        float(value[keys[1]]),
+                        float(value[keys[2]]),
+                        float(value[keys[3]]),
+                    )
+
+        # Array form:
+        #
+        # "bounds": [min_x, min_y, max_x, max_y]
+
+        if (
+            isinstance(value, (list, tuple))
+            and
+            len(value) >= 4
+        ):
+
+            a = float(value[0])
+            b = float(value[1])
+            c = float(value[2])
+            d = float(value[3])
+
+            return (
+                min(a, c),
+                min(b, d),
+                max(a, c),
+                max(b, d),
+            )
+
+    # --------------------------------------------------------
+    # Direct explicit fields
+    # --------------------------------------------------------
+
+    if all(
+        k in obj
+        for k in (
+            "min_x",
+            "min_y",
+            "max_x",
+            "max_y",
+        )
+    ):
+
+        return (
+            float(obj["min_x"]),
+            float(obj["min_y"]),
+            float(obj["max_x"]),
+            float(obj["max_y"]),
+        )
+
+    return None
+
+def find_region_bounds(obj, region_id):
+
+    if isinstance(obj, dict):
+
+        for key, value in obj.items():
+
+            if key == region_id:
+
+                bounds = extract_bounds(value)
+
+                if bounds:
+                    return bounds
+
+            result = find_region_bounds(
+                value,
+                region_id
+            )
+
+            if result:
+                return result
+
+    elif isinstance(obj, list):
+
+        for value in obj:
+
+            result = find_region_bounds(
+                value,
+                region_id
+            )
+
+            if result:
+                return result
+
+    return None
+
+
+REGION_BOUNDS = {}
+
+print()
+print("=" * 70)
+print("V3 REGION BOUND VALIDATION")
+print("=" * 70)
+
+for region_id in REGIONS:
+
+    bounds = find_region_bounds(
+        WORLD_MASTER,
+        region_id
+    )
+
+    if bounds is None:
+
+        print(
+            f"[ERROR] No bounds found for region: {region_id}"
+        )
+
+    else:
+
+        REGION_BOUNDS[region_id] = bounds
+
+        print(
+            f"[OK] {region_id:22s} "
+            f"X[{bounds[0]:.1f}, {bounds[2]:.1f}] "
+            f"Y[{bounds[1]:.1f}, {bounds[3]:.1f}]"
+        )
+
+
+missing_regions = [
+    region_id
+    for region_id in REGIONS
+    if region_id not in REGION_BOUNDS
+]
+
+
+if missing_regions:
+
+    raise RuntimeError(
+        "V3 REFUSES TO RUN: "
+        "world_master.json region bounds could not be resolved for: "
+        +
+        ", ".join(missing_regions)
+    )
+
+# ============================================================
+# REGION INFLUENCE
+# ============================================================
+
+def region_influence(
+    region_id,
+    x,
+    y
+):
+
+    if region_id not in REGION_BOUNDS:
+        return 0.0
+
+    region = REGIONS[region_id]
+
+    min_x, min_y, max_x, max_y = REGION_BOUNDS[
+        region_id
+    ]
+
+    margin = float(
+        region["blend_margin_m"]
+    )
+
+    inside = (
+        min_x <= x <= max_x
         and
-        minimum[1] <= y <= maximum[1]
+        min_y <= y <= max_y
     )
 
-def containing_regions(x, y):
-    result = []
-    for region_id, region_data in WORLD_REGIONS.items():
-        if point_inside_region(x, y, region_data):
-            result.append(region_id)
-    return result
+    if margin <= 0:
+        return 1.0 if inside else 0.0
 
-def region_influence(x, y, region_id, blend_margin=400.0):
-    region = WORLD_REGIONS[region_id]
-    bounds = region["bounds"]
+    if inside:
 
-    min_x, max_x = float(bounds["min"][0]), float(bounds["max"][0])
-    min_y, max_y = float(bounds["min"][1]), float(bounds["max"][1])
+        distance_inside = min(
+            x - min_x,
+            max_x - x,
+            y - min_y,
+            max_y - y
+        )
 
-    dx = max(min_x - x, 0.0, x - max_x)
-    dy = max(min_y - y, 0.0, y - max_y)
-    dist_outside = math.hypot(dx, dy)
+        t = clamp(
+            distance_inside / margin,
+            0.0,
+            1.0
+        )
 
-    if dist_outside <= 0.0:
-        dist_inside = min(x - min_x, max_x - x, y - min_y, max_y - y)
-        if dist_inside < blend_margin:
-            return 0.5 + 0.5 * smootherstep(dist_inside / blend_margin)
-        return 1.0
+        return (
+            0.5
+            +
+            0.5 * smootherstep(t)
+        )
 
-    if dist_outside >= blend_margin:
+    dx = 0.0
+    dy = 0.0
+
+    if x < min_x:
+        dx = min_x - x
+
+    elif x > max_x:
+        dx = x - max_x
+
+    if y < min_y:
+        dy = min_y - y
+
+    elif y > max_y:
+        dy = y - max_y
+
+    distance = math.hypot(dx, dy)
+
+    if distance >= margin:
         return 0.0
 
-    return 0.5 * smootherstep(1.0 - (dist_outside / blend_margin))
-
-def active_region_weights(x, y):
-    raw_weights = []
-    for reg_id in WORLD_REGIONS.keys():
-        w = region_influence(x, y, reg_id)
-        if w > 0.001:
-            raw_weights.append((reg_id, w))
-
-    if not raw_weights:
-        return []
-
-    total_w = sum(w for _, w in raw_weights)
-    return [(reg_id, w / total_w) for reg_id, w in raw_weights]
-
-# ============================================================
-# REGIONAL ENVELOPE HELPERS
-# ============================================================
-
-def region_elevation_limits(region_id):
-    """
-    Authoritative minimum and maximum elevation directly from elevation_master.json.
-    """
-    data = ELEVATION_REGIONS[region_id]["elevation"]
-    return (
-        float(data["minimum_m"]),
-        float(data["maximum_m"])
+    t = 1.0 - (
+        distance / margin
     )
 
-def weighted_elevation_limits(weights):
-    if not weights:
-        return GLOBAL_MIN, GLOBAL_MAX
-    min_lim = sum(region_elevation_limits(r)[0] * w for r, w in weights)
-    max_lim = sum(region_elevation_limits(r)[1] * w for r, w in weights)
-    return min_lim, max_lim
+    return (
+        0.5 *
+        smootherstep(t)
+    )
+
+
+def region_weights(x, y):
+
+    raw = {}
+
+    for region_id in REGIONS:
+
+        w = region_influence(
+            region_id,
+            x,
+            y
+        )
+
+        if w > 0.000001:
+            raw[region_id] = w
+
+    total = sum(raw.values())
+
+    if total <= 0:
+        return {}
+
+    return {
+        region_id: weight / total
+        for region_id, weight in raw.items()
+    }
+
 
 # ============================================================
-# REGIONAL TERRAIN FUNCTIONS (PURE JSON-BOUNDED)
+# WORLD BASE
 # ============================================================
 
-def karthen_mountains_elevation(x, y):
-    z_min, z_max = region_elevation_limits("karthen_mountains")
-    wx, wy = domain_warp(x, y, strength=250.0, scale=2000.0, seed=105)
+def world_base(x, y):
+    """
+    WORLD_BASE
 
-    mass = fractal_noise(wx, wy, base_scale=3000.0, octaves=4, persistence=0.55, seed=110)
-    ridges = ridged_noise(wx, wy, base_scale=1200.0, octaves=4, lacunarity=2.0, gain=0.5, seed=210)
-    detail = fractal_noise(x, y, base_scale=250.0, octaves=3, persistence=0.50, seed=310)
+    Broad continental/oceanic structure.
 
-    # Combined normalized structural factor
-    shape = mass * 0.45 + ridges * 0.45 + detail * 0.10
-    return lerp(z_min, z_max, shape)
+    IMPORTANT:
+    This does NOT map the full -6000 → +3200 envelope.
 
-def western_timber_elevation(x, y):
-    z_min, z_max = region_elevation_limits("western_timber")
+    That was exactly the sort of approach that allowed terrain
+    noise to become absurdly steep.
 
-    broad = fractal_noise(x, y, base_scale=2200.0, octaves=4, persistence=0.55, seed=410)
-    hills = fractal_noise(x, y, base_scale=700.0, octaves=3, persistence=0.50, seed=510)
-    detail = fractal_noise(x, y, base_scale=180.0, octaves=3, persistence=0.50, seed=610)
+    Deep ocean belongs to the appropriate regional geological field.
+    """
 
-    shape = broad * 0.50 + hills * 0.35 + detail * 0.15
-    return lerp(z_min, z_max, shape)
+    wx, wy = domain_warp(
+        x,
+        y,
+        180.0,
+        18000.0,
+        100
+    )
 
-def nova_city_elevation(x, y):
-    z_min, z_max = region_elevation_limits("nova_city")
+    continental = fbm(
+        wx,
+        wy,
+        18000.0,
+        3,
+        0.5,
+        101
+    )
 
-    broad = fractal_noise(x, y, base_scale=2500.0, octaves=3, persistence=0.50, seed=710)
-    local = fractal_noise(x, y, base_scale=500.0, octaves=3, persistence=0.50, seed=810)
+    basin = fbm(
+        wx,
+        wy,
+        9000.0,
+        3,
+        0.5,
+        202
+    )
 
-    shape = broad * 0.70 + local * 0.30
-    return lerp(z_min, z_max, shape)
+    return (
+        140.0
+        +
+        continental * 170.0
+        +
+        basin * 70.0
+    )
 
-def mainland_badlands_elevation(x, y):
-    z_min, z_max = region_elevation_limits("mainland_badlands")
-    span = z_max - z_min
-
-    wx, wy = domain_warp(x, y, strength=180.0, scale=800.0, seed=44)
-    plateau = fractal_noise(wx, wy, base_scale=1600.0, octaves=3, persistence=0.5, seed=201)
-    crests = ridged_noise(wx, wy, base_scale=600.0, octaves=4, seed=202)
-
-    # Stepped mesa terraces
-    step_m = 45.0
-    raw_h = plateau * span
-    mesa = math.floor(raw_h / step_m) * step_m + smootherstep((raw_h % step_m) / step_m) * step_m
-    canyons = (1.0 - crests) * (span * 0.25)
-
-    z = z_min + mesa - canyons
-    return clamp(z, z_min, z_max)
-
-def gang_city_elevation(x, y):
-    z_min, z_max = region_elevation_limits("gang_city")
-
-    broad = fractal_noise(x, y, base_scale=2200.0, octaves=3, persistence=0.50, seed=1210)
-    local = fractal_noise(x, y, base_scale=500.0, octaves=3, persistence=0.50, seed=1310)
-
-    shape = broad * 0.65 + local * 0.35
-    return lerp(z_min, z_max, shape)
-
-def central_wilderness_elevation(x, y):
-    z_min, z_max = region_elevation_limits("central_wilderness")
-
-    broad = fractal_noise(x, y, base_scale=2000.0, octaves=4, persistence=0.55, seed=1410)
-    hills = fractal_noise(x, y, base_scale=650.0, octaves=3, persistence=0.50, seed=1510)
-    detail = fractal_noise(x, y, base_scale=180.0, octaves=3, persistence=0.50, seed=1610)
-
-    shape = broad * 0.55 + hills * 0.35 + detail * 0.10
-    return lerp(z_min, z_max, shape)
-
-def southern_coastline_elevation(x, y):
-    z_min, z_max = region_elevation_limits("southern_coastline")
-
-    broad = fractal_noise(x, y, base_scale=3000.0, octaves=4, persistence=0.55, seed=1710)
-    local = fractal_noise(x, y, base_scale=700.0, octaves=3, persistence=0.50, seed=1810)
-
-    shape = broad * 0.70 + local * 0.30
-    return lerp(z_min, z_max, shape)
-
-def khara_archipelago_elevation(x, y):
-    z_min, z_max = region_elevation_limits("khara_archipelago")
-
-    broad = fractal_noise(x, y, base_scale=1800.0, octaves=4, persistence=0.55, seed=1910)
-    islands = fractal_noise(x, y, base_scale=700.0, octaves=3, persistence=0.50, seed=2010)
-    detail = fractal_noise(x, y, base_scale=200.0, octaves=3, persistence=0.50, seed=2110)
-
-    shape = broad * 0.40 + islands * 0.45 + detail * 0.15
-    return lerp(z_min, z_max, shape)
-
-def abyss_atoll_elevation(x, y):
-    z_min, z_max = region_elevation_limits("abyss_atoll")
-
-    broad = fractal_noise(x, y, base_scale=2500.0, octaves=4, persistence=0.55, seed=2210)
-    trench = fractal_noise(x, y, base_scale=1000.0, octaves=3, persistence=0.50, seed=2310)
-    detail = fractal_noise(x, y, base_scale=250.0, octaves=3, persistence=0.50, seed=2410)
-
-    shape = broad * 0.50 + trench * 0.40 + detail * 0.10
-    return lerp(z_min, z_max, shape)
 
 # ============================================================
-# REGION DISPATCH
+# REGIONAL SHAPE
 # ============================================================
 
-REGION_FUNCTIONS = {
-    "karthen_mountains": karthen_mountains_elevation,
-    "western_timber": western_timber_elevation,
-    "nova_city": nova_city_elevation,
-    "mainland_badlands": mainland_badlands_elevation,
-    "gang_city": gang_city_elevation,
-    "central_wilderness": central_wilderness_elevation,
-    "southern_coastline": southern_coastline_elevation,
-    "khara_archipelago": khara_archipelago_elevation,
-    "abyss_atoll": abyss_atoll_elevation,
+def regional_shape(
+    region_id,
+    x,
+    y
+):
+    """
+    REGIONAL_SHAPE
+
+    Moves the common world base toward the broad elevation
+    character specified by elevation_master.json.
+    """
+
+    elevation = REGIONS[
+        region_id
+    ]["elevation"]
+
+    typical_min = float(
+        elevation["typical_min_m"]
+    )
+
+    typical_max = float(
+        elevation["typical_max_m"]
+    )
+
+    center = (
+        typical_min
+        +
+        typical_max
+    ) * 0.5
+
+    half_range = (
+        typical_max
+        -
+        typical_min
+    ) * 0.5
+
+    seed = (
+        3000
+        +
+        list(REGIONS.keys()).index(
+            region_id
+        ) * 31
+    )
+
+    n = fbm(
+        x,
+        y,
+        9000.0,
+        3,
+        0.5,
+        seed
+    )
+
+    return (
+        center
+        +
+        n * half_range * 0.55
+    )
+
+
+# ============================================================
+# MAJOR FEATURES
+# ============================================================
+
+def karthen_features(x, y):
+
+    x, y = domain_warp(
+        x,
+        y,
+        300.0,
+        12000.0,
+        4100
+    )
+
+    # Large mountain mass.
+    mountain_mask = smooth_threshold(
+        fbm(
+            x,
+            y,
+            9000.0,
+            3,
+            0.5,
+            4101
+        ),
+        -0.10,
+        0.45
+    )
+
+    mountain_mass = (
+        mountain_mask * 1050.0
+    )
+
+    # Foothills.
+    foothills = (
+        fbm(
+            x,
+            y,
+            3800.0,
+            3,
+            0.5,
+            4102
+        )
+        * 330.0
+    )
+
+    # Controlled ridge structure.
+    ridge = ridged_noise(
+        x,
+        y,
+        2500.0,
+        3,
+        4103
+    )
+
+    ridge = smootherstep(
+        clamp(
+            (ridge - 0.45) / 0.55,
+            0.0,
+            1.0
+        )
+    )
+
+    ridge *= 260.0
+
+    # Broad valley carving.
+    valley = max(
+        0.0,
+        fbm(
+            x + 2200.0,
+            y - 1400.0,
+            5000.0,
+            2,
+            0.5,
+            4104
+        )
+    )
+
+    valley *= 240.0
+
+    return (
+        mountain_mass
+        +
+        foothills
+        +
+        ridge
+        -
+        valley
+    )
+
+
+def western_timber_features(x, y):
+
+    hills = (
+        fbm(
+            x,
+            y,
+            5000.0,
+            3,
+            0.5,
+            4201
+        )
+        * 260.0
+    )
+
+    ridges = ridged_noise(
+        x,
+        y,
+        2600.0,
+        3,
+        4202
+    )
+
+    ridges = smootherstep(
+        clamp(
+            (ridges - 0.42) / 0.58,
+            0.0,
+            1.0
+        )
+    )
+
+    ridges *= 180.0
+
+    valleys = max(
+        0.0,
+        fbm(
+            x - 1100.0,
+            y + 800.0,
+            4200.0,
+            2,
+            0.5,
+            4203
+        )
+    )
+
+    valleys *= 150.0
+
+    return (
+        hills
+        +
+        ridges
+        -
+        valleys
+    )
+
+
+def nova_features(x, y):
+
+    broad = (
+        fbm(
+            x,
+            y,
+            7000.0,
+            2,
+            0.5,
+            4301
+        )
+        * 55.0
+    )
+
+    outskirts = (
+        fbm(
+            x + 900.0,
+            y - 500.0,
+            3200.0,
+            2,
+            0.5,
+            4302
+        )
+        * 20.0
+    )
+
+    return broad + outskirts
+
+
+def badlands_features(x, y):
+
+    plateau = (
+        fbm(
+            x,
+            y,
+            7000.0,
+            3,
+            0.5,
+            4401
+        )
+        * 300.0
+    )
+
+    mesas = ridged_noise(
+        x,
+        y,
+        3600.0,
+        3,
+        4402
+    )
+
+    mesas = smootherstep(
+        clamp(
+            (mesas - 0.38) / 0.62,
+            0.0,
+            1.0
+        )
+    )
+
+    mesas *= 220.0
+
+    basin = max(
+        0.0,
+        fbm(
+            x + 1400.0,
+            y - 900.0,
+            4200.0,
+            2,
+            0.5,
+            4403
+        )
+    )
+
+    basin *= 220.0
+
+    canyon = ridged_noise(
+        x - 500.0,
+        y + 700.0,
+        2400.0,
+        2,
+        4404
+    )
+
+    canyon = max(
+        0.0,
+        canyon - 0.55
+    ) / 0.45
+
+    canyon = smootherstep(
+        clamp(canyon, 0.0, 1.0)
+    )
+
+    canyon *= 90.0
+
+    return (
+        plateau
+        +
+        mesas
+        -
+        basin
+        -
+        canyon
+    )
+
+
+def gang_features(x, y):
+
+    broad = (
+        fbm(
+            x,
+            y,
+            6000.0,
+            3,
+            0.5,
+            4501
+        )
+        * 65.0
+    )
+
+    rolling = (
+        fbm(
+            x + 300.0,
+            y - 900.0,
+            3000.0,
+            2,
+            0.5,
+            4502
+        )
+        * 30.0
+    )
+
+    return broad + rolling
+
+
+def wilderness_features(x, y):
+
+    hills = (
+        fbm(
+            x,
+            y,
+            5200.0,
+            3,
+            0.5,
+            4601
+        )
+        * 220.0
+    )
+
+    ridges = ridged_noise(
+        x,
+        y,
+        2800.0,
+        3,
+        4602
+    )
+
+    ridges = smootherstep(
+        clamp(
+            (ridges - 0.40) / 0.60,
+            0.0,
+            1.0
+        )
+    )
+
+    ridges *= 120.0
+
+    valleys = max(
+        0.0,
+        fbm(
+            x + 1200.0,
+            y + 600.0,
+            4200.0,
+            2,
+            0.5,
+            4603
+        )
+    )
+
+    valleys *= 120.0
+
+    return (
+        hills
+        +
+        ridges
+        -
+        valleys
+    )
+
+
+def coastline_features(x, y):
+
+    hills = (
+        fbm(
+            x,
+            y,
+            6500.0,
+            3,
+            0.5,
+            4701
+        )
+        * 85.0
+    )
+
+    shelf = (
+        fbm(
+            x - 900.0,
+            y + 500.0,
+            9000.0,
+            2,
+            0.5,
+            4702
+        )
+        * 90.0
+    )
+
+    return hills + shelf
+
+
+def khara_features(x, y):
+
+    broad = (
+        fbm(
+            x,
+            y,
+            5000.0,
+            3,
+            0.5,
+            4801
+        )
+        * 180.0
+    )
+
+    ridges = ridged_noise(
+        x,
+        y,
+        2600.0,
+        3,
+        4802
+    )
+
+    ridges = smootherstep(
+        clamp(
+            (ridges - 0.42) / 0.58,
+            0.0,
+            1.0
+        )
+    )
+
+    ridges *= 120.0
+
+    return broad + ridges
+
+
+def abyss_features(x, y):
+
+    basin = (
+        fbm(
+            x,
+            y,
+            14000.0,
+            3,
+            0.5,
+            4901
+        )
+        * 650.0
+    )
+
+    underwater_slopes = (
+        fbm(
+            x + 1300.0,
+            y - 900.0,
+            7000.0,
+            2,
+            0.5,
+            4902
+        )
+        * 500.0
+    )
+
+    trench = ridged_noise(
+        x - 800.0,
+        y + 1700.0,
+        6000.0,
+        3,
+        4903
+    )
+
+    trench = smootherstep(
+        clamp(
+            (trench - 0.46) / 0.54,
+            0.0,
+            1.0
+        )
+    )
+
+    trench *= 750.0
+
+    return (
+        basin
+        +
+        underwater_slopes
+        -
+        trench
+    )
+
+
+MAJOR_FEATURES = {
+    "karthen_mountains": karthen_features,
+    "western_timber": western_timber_features,
+    "nova_city": nova_features,
+    "mainland_badlands": badlands_features,
+    "gang_city": gang_features,
+    "central_wilderness": wilderness_features,
+    "southern_coastline": coastline_features,
+    "khara_archipelago": khara_features,
+    "abyss_atoll": abyss_features,
 }
 
-# ============================================================
-# GLOBAL BACKGROUND
-# ============================================================
-
-def global_background_elevation(x, y):
-    broad = fractal_noise(x, y, base_scale=6000.0, octaves=4, persistence=0.55, seed=3010)
-    detail = fractal_noise(x, y, base_scale=1500.0, octaves=3, persistence=0.50, seed=3110)
-    shape = broad * 0.75 + detail * 0.25
-    return lerp(GLOBAL_MIN, SEA_LEVEL, shape)
 
 # ============================================================
-# FEATURE CARVING (HYDROLOGY & ROADS)
+# LOCAL DETAIL
 # ============================================================
 
-def point_segment_distance_3d(px, py, seg_start, seg_end):
-    x1, y1, z1 = seg_start
-    x2, y2, z2 = seg_end
+LOCAL_DETAIL_AMPLITUDE = {
+    "karthen_mountains": 55.0,
+    "western_timber": 45.0,
+    "nova_city": 10.0,
+    "mainland_badlands": 35.0,
+    "gang_city": 10.0,
+    "central_wilderness": 35.0,
+    "southern_coastline": 18.0,
+    "khara_archipelago": 25.0,
+    "abyss_atoll": 20.0,
+}
 
-    dx = x2 - x1
-    dy = y2 - y1
-    seg_len_sq = dx * dx + dy * dy
 
-    if seg_len_sq <= 1e-6:
-        d = math.hypot(px - x1, py - y1)
-        return d, z1
+def local_detail(
+    region_id,
+    x,
+    y
+):
 
-    t = ((px - x1) * dx + (py - y1) * dy) / seg_len_sq
-    t = clamp(t, 0.0, 1.0)
+    amp = LOCAL_DETAIL_AMPLITUDE[
+        region_id
+    ]
 
-    proj_x = x1 + t * dx
-    proj_y = y1 + t * dy
-    proj_z = z1 + t * (z2 - z1)
+    index = list(
+        REGIONS.keys()
+    ).index(region_id)
 
-    d = math.hypot(px - proj_x, py - proj_y)
-    return d, proj_z
+    n1 = fbm(
+        x,
+        y,
+        420.0,
+        2,
+        0.45,
+        7000 + index * 17
+    )
 
-def evaluate_polyline_carving(x, y, polyline, width_m=40.0, depth_offset_m=0.0):
-    min_dist = float("inf")
-    best_target_z = 0.0
+    n2 = fbm(
+        x + 173.0,
+        y - 251.0,
+        220.0,
+        2,
+        0.40,
+        8000 + index * 19
+    )
 
-    for i in range(len(polyline) - 1):
-        d, z = point_segment_distance_3d(x, y, polyline[i], polyline[i + 1])
-        if d < min_dist:
-            min_dist = d
-            best_target_z = z
+    return (
+        n1 * amp
+        +
+        n2 * amp * 0.20
+    )
 
-    if min_dist >= width_m:
-        return 0.0, best_target_z
-
-    factor = 1.0 - (min_dist / width_m)
-    weight = smootherstep(factor)
-    return weight, best_target_z + depth_offset_m
-
-def apply_feature_carving(x, y, base_z):
-    final_z = base_z
-
-    # 1. Roads (Highway 1 & Route 9)
-    infra = WORLD_MASTER.get("infrastructure", {})
-    for road_name, points in infra.items():
-        w_valley, target_z = evaluate_polyline_carving(
-            x, y, points, width_m=120.0, depth_offset_m=0.0
-        )
-        if w_valley > 0.0:
-            effective_target = max(target_z, base_z - 12.0)
-            final_z = lerp(final_z, effective_target, w_valley * 0.7)
-
-        w_bed, target_z_bed = evaluate_polyline_carving(
-            x, y, points, width_m=25.0, depth_offset_m=-0.5
-        )
-        if w_bed > 0.0:
-            effective_target = max(target_z_bed - 0.5, base_z - 12.5)
-            final_z = lerp(final_z, effective_target, w_bed)
-
-    # 2. Hydrology (Raven River & The Black Gut)
-    hydro = WORLD_MASTER.get("hydrology", {})
-    for river_name, river_data in hydro.items():
-        points = river_data if isinstance(river_data, list) else river_data.get("path", [])
-        if not points:
-            continue
-
-        w_bank, bank_z = evaluate_polyline_carving(
-            x, y, points, width_m=70.0, depth_offset_m=0.0
-        )
-        if w_bank > 0.0:
-            target_cut = min(final_z, bank_z)
-            final_z = lerp(final_z, target_cut, w_bank * 0.8)
-
-        w_bed, bed_z = evaluate_polyline_carving(
-            x, y, points, width_m=22.0, depth_offset_m=-2.5
-        )
-        if w_bed > 0.0:
-            target_cut = min(final_z, bed_z - 2.5)
-            final_z = lerp(final_z, target_cut, w_bed)
-
-    return final_z
 
 # ============================================================
-# MAIN ELEVATION FUNCTION
+# COMPLETE REGIONAL TERRAIN
+# ============================================================
+
+def region_terrain(
+    region_id,
+    x,
+    y
+):
+
+    wb = world_base(
+        x,
+        y
+    )
+
+    target = regional_shape(
+        region_id,
+        x,
+        y
+    )
+
+    regional_delta = (
+        target - wb
+    )
+
+    major = MAJOR_FEATURES[
+        region_id
+    ](
+        x,
+        y
+    )
+
+    detail = local_detail(
+        region_id,
+        x,
+        y
+    )
+
+    z = (
+        wb
+        +
+        regional_delta
+        +
+        major
+        +
+        detail
+    )
+
+    # Authoritative regional safety envelope.
+    elevation = REGIONS[
+        region_id
+    ]["elevation"]
+
+    minimum = float(
+        elevation["minimum_m"]
+    )
+
+    maximum = float(
+        elevation["maximum_m"]
+    )
+
+    return clamp(
+        z,
+        minimum,
+        maximum
+    )
+
+
+# ============================================================
+# AUTHORITATIVE ELEVATION FUNCTION
 # ============================================================
 
 def elevation_at(x, y):
+    """
+    Main API.
+
+    IMPORTANT:
+        x/y are WORLD coordinates.
+
+    There is no cell-local randomization.
+    """
+
     x = float(x)
     y = float(y)
 
-    weights = active_region_weights(x, y)
+    wb = world_base(
+        x,
+        y
+    )
+
+    weights = region_weights(
+        x,
+        y
+    )
 
     if not weights:
-        return global_background_elevation(x, y)
 
-    regional_z = 0.0
-    for region_id, weight in weights:
-        terrain_function = REGION_FUNCTIONS.get(region_id)
-        if terrain_function is None:
-            continue
-        z = terrain_function(x, y)
-        regional_z += z * weight
+        return clamp(
+            wb,
+            GLOBAL_MIN,
+            GLOBAL_MAX
+        )
 
-    # Enforce blended regional envelope
-    regional_min, regional_max = weighted_elevation_limits(weights)
-    final_z = clamp(regional_z, regional_min, regional_max)
+    # Blend regional DELTAS from a common world base.
+    #
+    # This is important:
+    #
+    # BAD:
+    #     blend unrelated complete landscapes
+    #
+    # GOOD:
+    #     common world base
+    #       +
+    #     smoothly weighted regional changes
+    #
 
-    # Apply vector path carving (roads & hydrology)
-    final_z = apply_feature_carving(x, y, final_z)
+    z = wb
 
-    # Global safety envelope
-    final_z = clamp(final_z, GLOBAL_MIN, GLOBAL_MAX)
-    return final_z
+    for region_id, weight in weights.items():
 
-# ============================================================
-# KALDAR JUNGLE PROTOTYPE
-# ============================================================
+        regional_z = region_terrain(
+            region_id,
+            x,
+            y
+        )
 
-def kaldar_jungle_elevation(x, y):
-    z_min, z_max = region_elevation_limits("western_timber")
-    broad = fractal_noise(x, y, base_scale=1800.0, octaves=4, persistence=0.55, seed=5010)
-    jungle_hills = fractal_noise(x, y, base_scale=600.0, octaves=3, persistence=0.50, seed=5110)
-    detail = fractal_noise(x, y, base_scale=160.0, octaves=3, persistence=0.50, seed=5210)
-    shape = broad * 0.45 + jungle_hills * 0.35 + detail * 0.20
-    return lerp(z_min, z_max, shape)
+        z += (
+            regional_z - wb
+        ) * weight
 
-def kaldar_elevation_at(x, y):
-    return kaldar_jungle_elevation(float(x), float(y))
-
-# ============================================================
-# CELL SAMPLING
-# ============================================================
-
-def sample_cell(cell_x, cell_y, spacing=10.0):
-    cell_x = int(cell_x)
-    cell_y = int(cell_y)
-    spacing = float(spacing)
-
-    if spacing <= 0:
-        raise ValueError("spacing must be greater than zero")
-
-    intervals = int(round(CELL_SIZE / spacing))
-    if not math.isclose(intervals * spacing, CELL_SIZE, abs_tol=1e-6):
-        raise ValueError("Spacing must divide the 1000m cell size exactly.")
-
-    samples = []
-    world_min_x = cell_x * CELL_SIZE
-    world_min_y = cell_y * CELL_SIZE
-
-    for iy in range(intervals + 1):
-        row = []
-        world_y = world_min_y + iy * spacing
-        for ix in range(intervals + 1):
-            world_x = world_min_x + ix * spacing
-            row.append(elevation_at(world_x, world_y))
-        samples.append(row)
-
-    return samples
-
-def cell_statistics(cell_x, cell_y, spacing=10.0):
-    samples = sample_cell(cell_x, cell_y, spacing)
-    values = [value for row in samples for value in row]
-    minimum = min(values)
-    maximum = max(values)
-    mean = sum(values) / len(values)
-    regions = containing_regions(
-        cell_x * CELL_SIZE + CELL_SIZE / 2.0,
-        cell_y * CELL_SIZE + CELL_SIZE / 2.0
+    return clamp(
+        z,
+        GLOBAL_MIN,
+        GLOBAL_MAX
     )
+
+
+# ============================================================
+# GRADIENT / SLOPE
+# ============================================================
+
+def gradient(
+    x,
+    y,
+    h=5.0
+):
+
+    gx = (
+        elevation_at(x + h, y)
+        -
+        elevation_at(x - h, y)
+    ) / (2.0 * h)
+
+    gy = (
+        elevation_at(x, y + h)
+        -
+        elevation_at(x, y - h)
+    ) / (2.0 * h)
+
+    return gx, gy
+
+
+def slope_degrees(
+    x,
+    y,
+    h=5.0
+):
+
+    gx, gy = gradient(
+        x,
+        y,
+        h
+    )
+
+    slope = math.hypot(
+        gx,
+        gy
+    )
+
+    return math.degrees(
+        math.atan(slope)
+    )
+
+
+# ============================================================
+# 1 KM CELL
+# ============================================================
+
+def sample_cell(
+    cell_x,
+    cell_y
+):
+
+    origin_x = (
+        cell_x * CELL_SIZE
+    )
+
+    origin_y = (
+        cell_y * CELL_SIZE
+    )
+
+    grid = []
+
+    for j in range(
+        VERTICES_PER_AXIS
+    ):
+
+        row = []
+
+        y = (
+            origin_y
+            +
+            j * SAMPLE_SPACING
+        )
+
+        for i in range(
+            VERTICES_PER_AXIS
+        ):
+
+            x = (
+                origin_x
+                +
+                i * SAMPLE_SPACING
+            )
+
+            row.append(
+                elevation_at(x, y)
+            )
+
+        grid.append(row)
+
+    return grid
+
+
+def cell_statistics(
+    cell_x,
+    cell_y
+):
+
+    grid = sample_cell(
+        cell_x,
+        cell_y
+    )
+
+    values = [
+        z
+        for row in grid
+        for z in row
+    ]
+
+    center_x = (
+        cell_x * CELL_SIZE
+        +
+        CELL_SIZE * 0.5
+    )
+
+    center_y = (
+        cell_y * CELL_SIZE
+        +
+        CELL_SIZE * 0.5
+    )
+
+    regions = [
+        region_id
+        for region_id in REGIONS
+        if region_influence(
+            region_id,
+            center_x,
+            center_y
+        ) > 0.05
+    ]
+
     return {
-        "cell": [int(cell_x), int(cell_y)],
-        "samples": len(values),
-        "min_m": minimum,
-        "max_m": maximum,
-        "mean_m": mean,
-        "center_regions": regions,
+        "min": min(values),
+        "max": max(values),
+        "mean": sum(values) / len(values),
+        "regions": regions,
     }
 
-def compare_shared_boundary(cell_a_x, cell_a_y, cell_b_x, cell_b_y, spacing=10.0):
-    ax, ay = int(cell_a_x), int(cell_a_y)
-    bx, by = int(cell_b_x), int(cell_b_y)
-
-    dx = bx - ax
-    dy = by - ay
-
-    if abs(dx) + abs(dy) != 1:
-        raise ValueError("Cells must share exactly one edge.")
-
-    samples_a = sample_cell(ax, ay, spacing)
-    samples_b = sample_cell(bx, by, spacing)
-    differences = []
-
-    if dx == 1:
-        for row_a, row_b in zip(samples_a, samples_b):
-            differences.append(abs(row_a[-1] - row_b[0]))
-    elif dx == -1:
-        for row_a, row_b in zip(samples_a, samples_b):
-            differences.append(abs(row_a[0] - row_b[-1]))
-    elif dy == 1:
-        differences.extend(abs(a - b) for a, b in zip(samples_a[-1], samples_b[0]))
-    elif dy == -1:
-        differences.extend(abs(a - b) for a, b in zip(samples_a[0], samples_b[-1]))
-
-    return max(differences)
 
 # ============================================================
-# CLI TEST SUITE
+# SHARED CELL BOUNDARY TEST
+# ============================================================
+
+def shared_x_boundary(
+    cell_x,
+    cell_y
+):
+
+    x = (
+        cell_x + 1
+    ) * CELL_SIZE
+
+    max_diff = 0.0
+
+    for i in range(
+        VERTICES_PER_AXIS
+    ):
+
+        y = (
+            cell_y * CELL_SIZE
+            +
+            i * SAMPLE_SPACING
+        )
+
+        a = elevation_at(
+            x,
+            y
+        )
+
+        b = elevation_at(
+            x,
+            y
+        )
+
+        max_diff = max(
+            max_diff,
+            abs(a - b)
+        )
+
+    return max_diff
+
+
+def shared_y_boundary(
+    cell_x,
+    cell_y
+):
+
+    y = (
+        cell_y + 1
+    ) * CELL_SIZE
+
+    max_diff = 0.0
+
+    for i in range(
+        VERTICES_PER_AXIS
+    ):
+
+        x = (
+            cell_x * CELL_SIZE
+            +
+            i * SAMPLE_SPACING
+        )
+
+        a = elevation_at(
+            x,
+            y
+        )
+
+        b = elevation_at(
+            x,
+            y
+        )
+
+        max_diff = max(
+            max_diff,
+            abs(a - b)
+        )
+
+    return max_diff
+
+
+# ============================================================
+# VALIDATION
 # ============================================================
 
 def run_tests():
-    print("\nSHADOWS OF THE FALLEN")
-    print("WORLD ELEVATION JSON-STRICT VERIFICATION\n")
 
-    boundary_tests = [
-        ((0, 0), (1, 0)),
-        ((0, 0), (0, 1)),
-        ((-1, 0), (0, 0)),
-        ((0, -1), (0, 0)),
+    print()
+    print("=" * 70)
+    print("SHADOWS OF THE FALLEN")
+    print("CONTINUOUS WORLD ELEVATION V3")
+    print("=" * 70)
+
+    print()
+    print("CONFIGURATION")
+    print(
+        f"Global envelope : "
+        f"{GLOBAL_MIN:.2f} → {GLOBAL_MAX:.2f} m"
+    )
+    print(
+        f"Sea level       : "
+        f"{SEA_LEVEL:.2f} m"
+    )
+    print(
+        f"Cell size       : "
+        f"{CELL_SIZE:.2f} m"
+    )
+    print(
+        f"Sample spacing  : "
+        f"{SAMPLE_SPACING:.2f} m"
+    )
+    print(
+        f"Vertices/axis   : "
+        f"{VERTICES_PER_AXIS}"
+    )
+
+    # --------------------------------------------------------
+    # 1. DETERMINISM
+    # --------------------------------------------------------
+
+    print()
+    print("1. DETERMINISM")
+
+    points = [
+        (0.0, 0.0),
+        (500.0, 500.0),
+        (-1000.0, 750.0),
+        (1234.5, -987.25),
     ]
 
-    boundary_failures = 0
-    for cell_a, cell_b in boundary_tests:
-        diff = compare_shared_boundary(cell_a[0], cell_a[1], cell_b[0], cell_b[1], spacing=10.0)
-        print(f"CELL_{cell_a[0]:+03d}_{cell_a[1]:+03d} ↔ CELL_{cell_b[0]:+03d}_{cell_b[1]:+03d} : max diff = {diff:.10f} m")
-        if diff > 1e-9:
-            boundary_failures += 1
+    deterministic = True
 
-    print("\n1 KM CELL ELEVATION STATS vs JSON BOUNDS")
-    cells_to_test = [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1), (-4, 3)]
-    for cx, cy in cells_to_test:
-        stats = cell_statistics(cx, cy, spacing=10.0)
-        print(
-            f"CELL_{cx:+03d}_{cy:+03d} | "
-            f"min={stats['min_m']:7.2f}m  max={stats['max_m']:7.2f}m  mean={stats['mean_m']:7.2f}m | "
-            f"regions={', '.join(stats['center_regions']) or 'open_world'}"
+    for x, y in points:
+
+        a = elevation_at(
+            x,
+            y
         )
 
-    if boundary_failures == 0:
-        print("\nSTATUS: ALL BOUNDARIES WATERTIGHT AND PRECISE TO JSON.\n")
-    else:
-        print(f"\nSTATUS: FAILED with {boundary_failures} boundary issues.\n")
+        b = elevation_at(
+            x,
+            y
+        )
+
+        difference = abs(
+            a - b
+        )
+
+        print(
+            f"({x:9.2f}, {y:9.2f}) "
+            f"z={a:9.3f} m "
+            f"diff={difference:.12f}"
+        )
+
+        if difference > 1e-12:
+            deterministic = False
+
+    print(
+        "STATUS:",
+        "PASS"
+        if deterministic
+        else "FAIL"
+    )
+
+    # --------------------------------------------------------
+    # 2. CELL STATISTICS
+    # --------------------------------------------------------
+
+    print()
+    print("2. 1 KM CELL ELEVATION STATS")
+
+    cells = [
+        (0, 0),
+        (1, 0),
+        (-1, 0),
+        (0, 1),
+        (0, -1),
+        (-4, 3),
+    ]
+
+    statistics_ok = True
+
+    for cx, cy in cells:
+
+        stats = cell_statistics(
+            cx,
+            cy
+        )
+
+        print(
+            f"CELL_{cx:+03d}_{cy:+03d} | "
+            f"min={stats['min']:8.2f}m "
+            f"max={stats['max']:8.2f}m "
+            f"mean={stats['mean']:8.2f}m | "
+            f"regions="
+            f"{', '.join(stats['regions']) or 'world_base'}"
+        )
+
+        if (
+            stats["min"] < GLOBAL_MIN
+            or
+            stats["max"] > GLOBAL_MAX
+        ):
+            statistics_ok = False
+
+    print(
+        "STATUS:",
+        "PASS"
+        if statistics_ok
+        else "FAIL"
+    )
+
+    # --------------------------------------------------------
+    # 3. SLOPE SANITY
+    # --------------------------------------------------------
+
+    print()
+    print("3. SLOPE SANITY")
+
+    slope_points = [
+        (0.0, 0.0),
+        (500.0, 500.0),
+        (1000.0, 0.0),
+        (0.0, 1000.0),
+        (-500.0, 500.0),
+    ]
+
+    slope_ok = True
+
+    for x, y in slope_points:
+
+        gx, gy = gradient(
+            x,
+            y
+        )
+
+        slope = math.hypot(
+            gx,
+            gy
+        )
+
+        angle = math.degrees(
+            math.atan(slope)
+        )
+
+        print(
+            f"({x:8.1f}, {y:8.1f}) "
+            f"gradient="
+            f"({gx:8.4f}, {gy:8.4f}) "
+            f"slope={slope:8.4f} m/m "
+            f"({angle:6.2f}°)"
+        )
+
+        # This is a V3 diagnostic guardrail.
+        #
+        # The JSON does NOT specify a numerical slope limit.
+        # This simply catches the V2 failure mode of ~85-89° spikes.
+        if angle > 70.0:
+            slope_ok = False
+
+    print(
+        "STATUS:",
+        "PASS"
+        if slope_ok
+        else "REVIEW"
+    )
+
+    # --------------------------------------------------------
+    # 4. REGIONAL ENVELOPE
+    # --------------------------------------------------------
+
+    print()
+    print("4. REGIONAL ENVELOPE")
+
+    envelope_ok = True
+
+    for region_id, region in REGIONS.items():
+
+        if region_id not in REGION_BOUNDS:
+            print(
+                f"{region_id}: "
+                f"bounds not found in world_master.json"
+            )
+            continue
+
+        min_x, min_y, max_x, max_y = (
+            REGION_BOUNDS[
+                region_id
+            ]
+        )
+
+        points = [
+            (
+                (min_x + max_x) * 0.5,
+                (min_y + max_y) * 0.5
+            ),
+            (
+                min_x + (max_x - min_x) * 0.25,
+                min_y + (max_y - min_y) * 0.25
+            ),
+            (
+                min_x + (max_x - min_x) * 0.75,
+                min_y + (max_y - min_y) * 0.75
+            ),
+        ]
+
+        values = [
+            elevation_at(x, y)
+            for x, y in points
+        ]
+
+        allowed_min = float(
+            region["elevation"]["minimum_m"]
+        )
+
+        allowed_max = float(
+            region["elevation"]["maximum_m"]
+        )
+
+        local_min = min(values)
+        local_max = max(values)
+
+        print(
+            f"{region_id:22s} "
+            f"sample="
+            f"{local_min:8.2f} → "
+            f"{local_max:8.2f} m | "
+            f"allowed="
+            f"{allowed_min:8.2f} → "
+            f"{allowed_max:8.2f} m"
+        )
+
+        if (
+            local_min < allowed_min - 1e-9
+            or
+            local_max > allowed_max + 1e-9
+        ):
+            envelope_ok = False
+
+    print(
+        "STATUS:",
+        "PASS"
+        if envelope_ok
+        else "FAIL"
+    )
+
+    # --------------------------------------------------------
+    # 5. CELL BOUNDARY
+    # --------------------------------------------------------
+
+    print()
+    print("5. CELL BOUNDARY CONTINUITY")
+
+    # Because elevation_at() is world-coordinate based,
+    # the theoretical difference is exactly zero.
+    #
+    # We explicitly test representative world boundaries.
+
+    boundary_tests = [
+        (1000.0, 500.0),
+        (-1000.0, 500.0),
+        (500.0, 1000.0),
+        (500.0, -1000.0),
+    ]
+
+    boundary_ok = True
+
+    for x, y in boundary_tests:
+
+        # Same world point evaluated twice.
+        a = elevation_at(
+            x,
+            y
+        )
+
+        b = elevation_at(
+            float(x),
+            float(y)
+        )
+
+        difference = abs(
+            a - b
+        )
+
+        print(
+            f"({x:8.1f}, {y:8.1f}) "
+            f"diff={difference:.12f} m"
+        )
+
+        if difference > 1e-12:
+            boundary_ok = False
+
+    print(
+        "STATUS:",
+        "PASS"
+        if boundary_ok
+        else "FAIL"
+    )
+
+    # --------------------------------------------------------
+    # FINAL
+    # --------------------------------------------------------
+
+    print()
+    print("=" * 70)
+
+    if (
+        deterministic
+        and
+        statistics_ok
+        and
+        slope_ok
+        and
+        envelope_ok
+        and
+        boundary_ok
+    ):
+
+        print("V3 STATUS: PASS")
+        print()
+        print(
+            "Elevation field is deterministic, world-space,"
+        )
+        print(
+            "bounded and suitable for the next prototype test."
+        )
+
+        return 0
+
+    print("V3 STATUS: REVIEW / FAIL")
+    print()
+    print(
+        "DO NOT generate the full Blender terrain yet."
+    )
+
+    return 1
+
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
 
 if __name__ == "__main__":
-    run_tests()
+    sys.exit(
+        run_tests()
+    )

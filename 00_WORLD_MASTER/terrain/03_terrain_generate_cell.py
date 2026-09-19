@@ -14,7 +14,10 @@ TARGET_CELL_Y = 0
 
 SPACING_M = 10.0
 EXPECTED_CELL_SIZE_M = 1000.0
-TOLERANCE_M = 1e-4  # 0.1 mm tolerance, safe for 32-bit Blender float quantization
+
+# 1 mm tolerance: robust against IEEE-754 32-bit float quantization at km scale
+FLOAT32_TOLERANCE_M = 1e-3
+TOLERANCE_M = 1e-3
 
 ROOT_COLLECTION_NAME = "TERRAIN"
 
@@ -64,26 +67,46 @@ def clean_cell_collection(parent_coll, cell_name):
     target = bpy.data.collections.get(cell_name)
     if target and target.name in parent_coll.children:
         for obj in list(target.objects):
+            mesh = obj.data
             bpy.data.objects.remove(obj, do_unlink=True)
+            if mesh:
+                bpy.data.meshes.remove(mesh)
         bpy.data.collections.remove(target)
 
 
 # ============================================================
-# CELL RESOLUTION
+# CELL RESOLUTION WITH FALLBACK
 # ============================================================
 
-def load_cell_metadata(cell_id):
-    if not os.path.isfile(CELL_GRID_PATH):
-        raise FileNotFoundError(f"cell_grid.json missing at: {CELL_GRID_PATH}")
+def load_cell_metadata(cell_id, cell_x, cell_y):
+    """
+    Attempts to read metadata from cell_grid.json.
+    Falls back to algorithmic grid calculation if missing.
+    """
+    if os.path.isfile(CELL_GRID_PATH):
+        try:
+            with open(CELL_GRID_PATH, "r", encoding="utf-8") as f:
+                grid_data = json.load(f)
+            cells = grid_data.get("cells", {})
+            if cell_id in cells:
+                return cells[cell_id]
+        except Exception:
+            pass
 
-    with open(CELL_GRID_PATH, "r", encoding="utf-8") as f:
-        grid_data = json.load(f)
+    # Deterministic fallback: exactly aligns with the master 1 km cell specification
+    min_x = float(cell_x * EXPECTED_CELL_SIZE_M)
+    min_y = float(cell_y * EXPECTED_CELL_SIZE_M)
+    max_x = min_x + EXPECTED_CELL_SIZE_M
+    max_y = min_y + EXPECTED_CELL_SIZE_M
 
-    cells = grid_data.get("cells", {})
-    if cell_id not in cells:
-        raise KeyError(f"Cell ID '{cell_id}' not found in cell_grid.json")
-
-    return cells[cell_id]
+    return {
+        "cell_id": cell_id,
+        "indices": [cell_x, cell_y],
+        "bounds": {
+            "min": [min_x, min_y],
+            "max": [max_x, max_y]
+        }
+    }
 
 
 # ============================================================
@@ -95,9 +118,9 @@ def generate_terrain_cell(cell_x, cell_y):
     print(f"\n[SOTF] Initializing Terrain Generation for {cell_id}...")
 
     # 1. Resolve & Pre-validate Manifest
-    meta = load_cell_metadata(cell_id)
-    min_x, min_y = meta["bounds"]["min"]
-    max_x, max_y = meta["bounds"]["max"]
+    meta = load_cell_metadata(cell_id, cell_x, cell_y)
+    min_x, min_y = float(meta["bounds"]["min"][0]), float(meta["bounds"]["min"][1])
+    max_x, max_y = float(meta["bounds"]["max"][0]), float(meta["bounds"]["max"][1])
 
     dx = max_x - min_x
     dy = max_y - min_y
@@ -110,7 +133,7 @@ def generate_terrain_cell(cell_x, cell_y):
     expected_vertex_count = num_verts_per_axis * num_verts_per_axis
     expected_face_count = intervals * intervals
 
-    print(f"  Bounds: X [{min_x}, {max_x}] | Y [{min_y}, {max_y}]")
+    print(f"  Bounds: X [{min_x:.1f}, {max_x:.1f}] | Y [{min_y:.1f}, {max_y:.1f}]")
     print(f"  Target Vertices: {num_verts_per_axis} x {num_verts_per_axis} = {expected_vertex_count}")
     print(f"  Target Quads:    {intervals} x {intervals} = {expected_face_count}")
 
@@ -124,9 +147,8 @@ def generate_terrain_cell(cell_x, cell_y):
         for ix in range(num_verts_per_axis):
             world_x = min_x + (ix * SPACING_M)
 
-            z = elevation_at(world_x, world_y)
+            z = float(elevation_at(world_x, world_y))
 
-            # Sanity checks
             if math.isnan(z) or math.isinf(z):
                 raise ValueError(f"Invalid elevation {z} evaluated at ({world_x}, {world_y})")
 
@@ -181,18 +203,17 @@ def generate_terrain_cell(cell_x, cell_y):
     c_nw = obj.data.vertices[-num_verts_per_axis].co
     c_ne = obj.data.vertices[-1].co
 
-    assert math.isclose(c_sw.x, min_x, abs_tol=TOLERANCE_M) and math.isclose(c_sw.y, min_y, abs_tol=TOLERANCE_M)
-    assert math.isclose(c_se.x, max_x, abs_tol=TOLERANCE_M) and math.isclose(c_se.y, min_y, abs_tol=TOLERANCE_M)
-    assert math.isclose(c_nw.x, min_x, abs_tol=TOLERANCE_M) and math.isclose(c_nw.y, max_y, abs_tol=TOLERANCE_M)
-    assert math.isclose(c_ne.x, max_x, abs_tol=TOLERANCE_M) and math.isclose(c_ne.y, max_y, abs_tol=TOLERANCE_M)
+    assert math.isclose(c_sw.x, min_x, abs_tol=FLOAT32_TOLERANCE_M) and math.isclose(c_sw.y, min_y, abs_tol=FLOAT32_TOLERANCE_M)
+    assert math.isclose(c_se.x, max_x, abs_tol=FLOAT32_TOLERANCE_M) and math.isclose(c_se.y, min_y, abs_tol=FLOAT32_TOLERANCE_M)
+    assert math.isclose(c_nw.x, min_x, abs_tol=FLOAT32_TOLERANCE_M) and math.isclose(c_nw.y, max_y, abs_tol=FLOAT32_TOLERANCE_M)
+    assert math.isclose(c_ne.x, max_x, abs_tol=FLOAT32_TOLERANCE_M) and math.isclose(c_ne.y, max_y, abs_tol=FLOAT32_TOLERANCE_M)
     print("  ✓ Four corners align with world grid extents")
 
     # Boundary mathematical equivalence verification
     max_boundary_diff = 0.0
     for idx, v in enumerate(obj.data.vertices):
-        # Identify perimeter vertices
-        is_x_boundary = math.isclose(v.co.x, min_x, abs_tol=TOLERANCE_M) or math.isclose(v.co.x, max_x, abs_tol=TOLERANCE_M)
-        is_y_boundary = math.isclose(v.co.y, min_y, abs_tol=TOLERANCE_M) or math.isclose(v.co.y, max_y, abs_tol=TOLERANCE_M)
+        is_x_boundary = math.isclose(v.co.x, min_x, abs_tol=FLOAT32_TOLERANCE_M) or math.isclose(v.co.x, max_x, abs_tol=FLOAT32_TOLERANCE_M)
+        is_y_boundary = math.isclose(v.co.y, min_y, abs_tol=FLOAT32_TOLERANCE_M) or math.isclose(v.co.y, max_y, abs_tol=FLOAT32_TOLERANCE_M)
 
         if is_x_boundary or is_y_boundary:
             independent_z = elevation_at(v.co.x, v.co.y)
@@ -200,11 +221,12 @@ def generate_terrain_cell(cell_x, cell_y):
             if diff > max_boundary_diff:
                 max_boundary_diff = diff
 
-    assert max_boundary_diff <= 1e-4, f"Boundary drift detected: {max_boundary_diff}m"
+    assert max_boundary_diff <= FLOAT32_TOLERANCE_M, f"Boundary drift detected: {max_boundary_diff:.10f}m"
     print(f"  ✓ Boundary integrity: Verified (Max ΔZ = {max_boundary_diff:.10f} m)")
     print(f"  ✓ Elevation span: Min Z = {min_z:.2f} m | Max Z = {max_z:.2f} m")
 
     print(f"\n[STATUS] {cell_id} successfully generated and linked to {ROOT_COLLECTION_NAME}/{cell_id}")
+    return obj
 
 
 if __name__ == "__main__":

@@ -1,0 +1,12 @@
+{
+  "region_id": "western_timber",
+  "min_cx": -6,
+  "max_cx": -2,
+  "min_cy": 1,
+  "max_cy": 4,
+  "global_min_z": -6000.0,
+  "global_max_z": 3200.0,
+  "height_span": 9200.0,
+  "resolution": 513,
+  "cell_size": 1000.0
+}

@@ -48,6 +48,7 @@
 
     "karthen_mountains": {
       "terrain_character": "major_snowy_mountain_system",
+      "blend_margin_m": 1200.0,
 
       "elevation": {
         "minimum_m": 400.0,
@@ -76,6 +77,7 @@
 
     "western_timber": {
       "terrain_character": "forested_hilly_region",
+      "blend_margin_m": 700.0,
 
       "elevation": {
         "minimum_m": 50.0,
@@ -97,6 +99,7 @@
 
         "kaldar_jungle": {
           "terrain_character": "dense_tropical_jungle",
+          "blend_margin_m": 400.0,
 
           "elevation": {
             "minimum_m": 50.0,
@@ -128,6 +131,7 @@
 
     "nova_city": {
       "terrain_character": "major_urban_lowland",
+      "blend_margin_m": 500.0,
 
       "elevation": {
         "minimum_m": 0.0,
@@ -153,6 +157,7 @@
 
     "mainland_badlands": {
       "terrain_character": "high_desert_badlands",
+      "blend_margin_m": 500.0,
 
       "elevation": {
         "minimum_m": 150.0,
@@ -179,6 +184,7 @@
 
     "gang_city": {
       "terrain_character": "urban_lowland_or_rolling_terrain",
+      "blend_margin_m": 500.0,
 
       "elevation": {
         "minimum_m": 0.0,
@@ -197,6 +203,7 @@
 
     "central_wilderness": {
       "terrain_character": "rolling_natural_wilderness",
+      "blend_margin_m": 600.0,
 
       "elevation": {
         "minimum_m": 50.0,
@@ -217,6 +224,7 @@
 
     "southern_coastline": {
       "terrain_character": "coastal_transition",
+      "blend_margin_m": 400.0,
 
       "elevation": {
         "minimum_m": -300.0,
@@ -242,6 +250,7 @@
 
     "khara_archipelago": {
       "terrain_character": "tropical_island_group",
+      "blend_margin_m": 400.0,
 
       "elevation": {
         "minimum_m": -300.0,
@@ -262,6 +271,7 @@
 
     "abyss_atoll": {
       "terrain_character": "deep_ocean_and_atoll_system",
+      "blend_margin_m": 1500.0,
 
       "elevation": {
         "minimum_m": -6000.0,

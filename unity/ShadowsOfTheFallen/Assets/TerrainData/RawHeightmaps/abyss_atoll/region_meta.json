@@ -1,0 +1,12 @@
+{
+  "region_id": "abyss_atoll",
+  "min_cx": 8,
+  "max_cx": 11,
+  "min_cy": -14,
+  "max_cy": -11,
+  "global_min_z": -6000.0,
+  "global_max_z": 3200.0,
+  "height_span": 9200.0,
+  "resolution": 513,
+  "cell_size": 1000.0
+}
