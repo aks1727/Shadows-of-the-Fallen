@@ -1,0 +1,343 @@
+{
+  "project": "Shadows of the Fallen",
+  "version": "1.0.0",
+  "purpose": "Authoritative elevation design for the physical world. Defines terrain character and elevation constraints without generating terrain geometry.",
+
+  "source_of_truth": {
+    "world_master": "00_WORLD_MASTER/coordinates/world_master.json",
+    "cell_grid": "00_WORLD_MASTER/coordinates/cell_grid.json",
+    "location_master": "00_WORLD_MASTER/locations/location_master.json"
+  },
+
+  "coordinate_system": {
+    "units": "meters",
+    "vertical_reference": "sea_level",
+    "sea_level_z": 0.0,
+    "up_axis": "Z"
+  },
+
+  "terrain_rules": {
+    "world_coordinate_based": true,
+    "continuous_across_cells": true,
+    "continuous_across_regions": true,
+    "independent_cell_elevation": false,
+    "flat_region_elevation": false,
+
+    "description": "Elevation is evaluated from world X/Y coordinates. Adjacent cells must share identical elevation values along their common boundaries."
+  },
+
+  "sampling": {
+    "prototype_cell_size_m": 1000.0,
+    "prototype_sample_spacing_m": 10.0,
+    "prototype_vertices_per_axis": 101,
+    "prototype_faces_per_cell": 10000
+  },
+
+  "sea_level": {
+    "z": 0.0,
+    "meaning": "Mean sea level reference.",
+    "coastline_rule": "The coastline occurs where terrain elevation crosses sea level."
+  },
+
+  "global_elevation_envelope": {
+    "minimum_m": -6000.0,
+    "maximum_m": 3200.0
+  },
+
+  "regions": {
+
+    "karthen_mountains": {
+      "terrain_character": "major_snowy_mountain_system",
+      "blend_margin_m": 1200.0,
+
+      "elevation": {
+        "minimum_m": 400.0,
+        "typical_min_m": 600.0,
+        "typical_max_m": 2200.0,
+        "maximum_m": 3200.0
+      },
+
+      "terrain_features": [
+        "deep valleys",
+        "foothills",
+        "highlands",
+        "steep mountain slopes",
+        "snow-covered peaks",
+        "frozen lakes",
+        "ice cliffs",
+        "mountain passes"
+      ],
+
+      "design_notes": [
+        "This region contains the highest terrestrial elevations in the world.",
+        "Mountain relief must develop progressively rather than as isolated random peaks.",
+        "Valleys must provide natural routes through the mountain system."
+      ]
+    },
+
+    "western_timber": {
+      "terrain_character": "forested_hilly_region",
+      "blend_margin_m": 700.0,
+
+      "elevation": {
+        "minimum_m": 50.0,
+        "typical_min_m": 100.0,
+        "typical_max_m": 700.0,
+        "maximum_m": 1000.0
+      },
+
+      "terrain_features": [
+        "forested hills",
+        "rolling terrain",
+        "valleys",
+        "streams",
+        "cliffs",
+        "dense woodland"
+      ],
+
+      "sub_regions": {
+
+        "kaldar_jungle": {
+          "terrain_character": "dense_tropical_jungle",
+          "blend_margin_m": 400.0,
+
+          "elevation": {
+            "minimum_m": 50.0,
+            "typical_min_m": 100.0,
+            "typical_max_m": 600.0,
+            "maximum_m": 1000.0
+          },
+
+          "terrain_features": [
+            "jungle valleys",
+            "steep jungle hills",
+            "waterfalls",
+            "river channels",
+            "cliffs",
+            "hidden caves",
+            "ancient terraces",
+            "dense forest slopes"
+          ],
+
+          "design_notes": [
+            "Kaldar must remain physically continuous with western_timber.",
+            "The jungle should contain stronger local relief than ordinary western_timber forest.",
+            "Terrain should naturally create hidden routes and enclosed spaces.",
+            "The Lost City should eventually occupy a terrain position that feels naturally concealed."
+          ]
+        }
+      }
+    },
+
+    "nova_city": {
+      "terrain_character": "major_urban_lowland",
+      "blend_margin_m": 500.0,
+
+      "elevation": {
+        "minimum_m": 0.0,
+        "typical_min_m": 10.0,
+        "typical_max_m": 100.0,
+        "maximum_m": 250.0
+      },
+
+      "terrain_features": [
+        "coastal lowlands",
+        "gentle slopes",
+        "rolling outskirts",
+        "urban buildable areas",
+        "drainage basins"
+      ],
+
+      "design_notes": [
+        "Terrain should favor large buildable areas.",
+        "Extreme slopes should be avoided in major urban zones.",
+        "The city must remain connected to surrounding terrain rather than appearing on an artificial flat platform."
+      ]
+    },
+
+    "mainland_badlands": {
+      "terrain_character": "high_desert_badlands",
+      "blend_margin_m": 500.0,
+
+      "elevation": {
+        "minimum_m": 150.0,
+        "typical_min_m": 250.0,
+        "typical_max_m": 800.0,
+        "maximum_m": 1200.0
+      },
+
+      "terrain_features": [
+        "desert basins",
+        "rocky plateaus",
+        "mesas",
+        "canyons",
+        "dry valleys",
+        "rock formations"
+      ],
+
+      "design_notes": [
+        "Relief should be strongly visible.",
+        "Major terrain formations should guide roads and settlements.",
+        "Canyons and basins should emerge from large-scale terrain structure rather than random noise."
+      ]
+    },
+
+    "gang_city": {
+      "terrain_character": "urban_lowland_or_rolling_terrain",
+      "blend_margin_m": 500.0,
+
+      "elevation": {
+        "minimum_m": 0.0,
+        "typical_min_m": 20.0,
+        "typical_max_m": 120.0,
+        "maximum_m": 250.0
+      },
+
+      "terrain_features": [
+        "lowlands",
+        "rolling terrain",
+        "urban plateaus",
+        "drainage valleys"
+      ]
+    },
+
+    "central_wilderness": {
+      "terrain_character": "rolling_natural_wilderness",
+      "blend_margin_m": 600.0,
+
+      "elevation": {
+        "minimum_m": 50.0,
+        "typical_min_m": 100.0,
+        "typical_max_m": 500.0,
+        "maximum_m": 800.0
+      },
+
+      "terrain_features": [
+        "rolling hills",
+        "valleys",
+        "forests",
+        "grasslands",
+        "streams",
+        "natural ridges"
+      ]
+    },
+
+    "southern_coastline": {
+      "terrain_character": "coastal_transition",
+      "blend_margin_m": 400.0,
+
+      "elevation": {
+        "minimum_m": -300.0,
+        "typical_min_m": -20.0,
+        "typical_max_m": 100.0,
+        "maximum_m": 300.0
+      },
+
+      "terrain_features": [
+        "beaches",
+        "coastal plains",
+        "cliffs",
+        "estuaries",
+        "coastal hills",
+        "continental shelf"
+      ],
+
+      "design_notes": [
+        "This region contains both terrestrial and underwater terrain.",
+        "The transition through sea level must be continuous."
+      ]
+    },
+
+    "khara_archipelago": {
+      "terrain_character": "tropical_island_group",
+      "blend_margin_m": 400.0,
+
+      "elevation": {
+        "minimum_m": -300.0,
+        "typical_min_m": 0.0,
+        "typical_max_m": 300.0,
+        "maximum_m": 600.0
+      },
+
+      "terrain_features": [
+        "beaches",
+        "coastal cliffs",
+        "tropical hills",
+        "jungle interiors",
+        "island ridges",
+        "underwater shelves"
+      ]
+    },
+
+    "abyss_atoll": {
+      "terrain_character": "deep_ocean_and_atoll_system",
+      "blend_margin_m": 1500.0,
+
+      "elevation": {
+        "minimum_m": -6000.0,
+        "typical_min_m": -5000.0,
+        "typical_max_m": 0.0,
+        "maximum_m": 50.0
+      },
+
+      "terrain_features": [
+        "deep ocean basin",
+        "underwater slopes",
+        "continental shelf",
+        "atoll formations",
+        "underwater cliffs",
+        "deep trenches",
+        "submerged ruins"
+      ],
+
+      "design_notes": [
+        "The deepest bathymetry belongs here.",
+        "The ocean floor must not be represented as a single flat plane.",
+        "Large-scale underwater terrain must be established before local underwater landmarks are placed."
+      ]
+    }
+  },
+
+  "terrain_generation_model": {
+    "formula": "WORLD_BASE + REGIONAL_SHAPE + MAJOR_FEATURES + LOCAL_DETAIL",
+
+    "world_base": {
+      "purpose": "Large-scale continental and oceanic elevation structure."
+    },
+
+    "regional_shape": {
+      "purpose": "Controls the broad elevation character of each World Master region."
+    },
+
+    "major_features": {
+      "purpose": "Creates mountains, valleys, plateaus, basins, canyons, shelves and other geological structures."
+    },
+
+    "local_detail": {
+      "purpose": "Adds smaller-scale terrain variation while preserving the large geological structure."
+    },
+
+    "random_noise_policy": {
+      "allowed": true,
+      "primary_terrain_method": false,
+      "description": "Noise may add detail but must not be responsible for the primary shape of the world."
+    }
+  },
+
+  "continuity_rules": [
+    "Elevation is a function of world X/Y coordinates.",
+    "Two adjacent cells must produce the same Z value at every shared boundary sample.",
+    "Region boundaries must not create artificial elevation steps.",
+    "Geographic sub-regions must blend continuously into their parent regions.",
+    "Kaldar Jungle must blend continuously into western_timber.",
+    "Coastlines are determined by the elevation field crossing sea level.",
+    "Terrain generation must not assign independent random offsets to individual cells."
+  ],
+
+  "status": {
+    "design_stage": "initial_authoritative_specification",
+    "terrain_generated": false,
+    "values_locked": false,
+    "requires_validation": true
+  }
+}

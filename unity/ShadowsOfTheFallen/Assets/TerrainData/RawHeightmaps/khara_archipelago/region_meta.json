@@ -1,0 +1,12 @@
+{
+  "region_id": "khara_archipelago",
+  "min_cx": -12,
+  "max_cx": -8,
+  "min_cy": -12,
+  "max_cy": -7,
+  "global_min_z": -6000.0,
+  "global_max_z": 3200.0,
+  "height_span": 9200.0,
+  "resolution": 513,
+  "cell_size": 1000.0
+}
